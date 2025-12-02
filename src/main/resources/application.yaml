@@ -1,0 +1,11 @@
+# Spring Application Configuration
+spring:
+  application:
+    name: military-api
+
+  # Database Configuration
+  datasource:
+    url: jdbc:postgresql://localhost:5432/military_db
+    username: military_user
+    password: military_pass
+    driver-class-name: org.postgresql.Driver

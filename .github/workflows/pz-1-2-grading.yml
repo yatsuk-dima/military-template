@@ -1,0 +1,1990 @@
+name: PZ 1/2 - Automated Grading
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'pom.xml'
+
+env:
+  JAVA_VERSION: '17'
+  MAVEN_OPTS: -Xmx1024m
+
+jobs:
+  # ============================================================================
+  # JOB 1: Detect Variant (A/B/C)
+  # ============================================================================
+  detect-variant:
+    name: 🔍 Detect Student Variant
+    runs-on: ubuntu-latest
+    outputs:
+      variant: ${{ steps.detect.outputs.variant }}
+      variant_name: ${{ steps.detect.outputs.variant_name }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect variant from code
+        id: detect
+        run: |
+          # Detect variant based on Entity class names (more precise patterns)
+          if grep -r "class SupplyCategory" src/main/java/ && grep -r "class SupplyItem" src/main/java/ && grep -r "class Warehouse" src/main/java/; then
+            echo "variant=A" >> $GITHUB_OUTPUT
+            echo "variant_name=Supply Management (МТЗ)" >> $GITHUB_OUTPUT
+            echo "category_entity=SupplyCategory" >> $GITHUB_OUTPUT
+            echo "item_entity=SupplyItem" >> $GITHUB_OUTPUT
+            echo "location_entity=Warehouse" >> $GITHUB_OUTPUT
+          elif grep -r "class VehicleCategory" src/main/java/ && grep -r "class Vehicle[^A-Za-z]" src/main/java/ && grep -r "class Driver" src/main/java/; then
+            echo "variant=B" >> $GITHUB_OUTPUT
+            echo "variant_name=Vehicle Management (Транспорт)" >> $GITHUB_OUTPUT
+            echo "category_entity=VehicleCategory" >> $GITHUB_OUTPUT
+            echo "item_entity=Vehicle" >> $GITHUB_OUTPUT
+            echo "location_entity=Driver" >> $GITHUB_OUTPUT
+          elif grep -r "class UnitType" src/main/java/ && grep -r "class MilitaryUnit" src/main/java/ && grep -r "class Personnel" src/main/java/; then
+            echo "variant=C" >> $GITHUB_OUTPUT
+            echo "variant_name=Personnel Management (Персонал)" >> $GITHUB_OUTPUT
+            echo "category_entity=UnitType" >> $GITHUB_OUTPUT
+            echo "item_entity=Personnel" >> $GITHUB_OUTPUT
+            echo "location_entity=MilitaryUnit" >> $GITHUB_OUTPUT
+          else
+            echo "variant=UNKNOWN" >> $GITHUB_OUTPUT
+            echo "variant_name=Unknown - No valid entities detected" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Display detected variant
+        run: |
+          echo "### 🎯 Detected Variant: ${{ steps.detect.outputs.variant }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Variant Name:** ${{ steps.detect.outputs.variant_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.detect.outputs.variant }}" != "UNKNOWN" ]; then
+            echo "**Expected Entities:**" >> $GITHUB_STEP_SUMMARY
+            echo "- Category: ${{ steps.detect.outputs.category_entity }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Item: ${{ steps.detect.outputs.item_entity }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Location/Person: ${{ steps.detect.outputs.location_entity }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ============================================================================
+  # JOB 2: Build & Compile (ОБОВ'ЯЗКОВО - 0 балів якщо не компілюється)
+  # ============================================================================
+  build:
+    name: 🏗️ Build & Compile
+    runs-on: ubuntu-latest
+    needs: detect-variant
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build with Maven
+        id: build
+        run: |
+          echo "### 🏗️ Build Results" >> $GITHUB_STEP_SUMMARY
+          if mvn clean compile -B; then
+            echo "build_status=success" >> $GITHUB_OUTPUT
+            echo "✅ **Build:** SUCCESS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "build_status=failed" >> $GITHUB_OUTPUT
+            echo "❌ **Build:** FAILED - 0 балів (проєкт не компілюється)" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Package application
+        run: mvn package -DskipTests -B
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-jar
+          path: target/*.jar
+          retention-days: 7
+
+  # ============================================================================
+  # JOB 3: Code Style Check (Checkstyle)
+  # ============================================================================
+  checkstyle:
+    name: 📋 Code Style Check
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run Checkstyle
+        id: checkstyle
+        continue-on-error: true
+        run: |
+          mvn checkstyle:check -B > checkstyle-output.txt 2>&1 || true
+          
+          # Extract violations count
+          VIOLATIONS=$(grep -oP '\[ERROR\]' checkstyle-output.txt | wc -l || echo "0")
+          echo "violations=$VIOLATIONS" >> $GITHUB_OUTPUT
+          
+          echo "### 📋 Checkstyle Results" >> $GITHUB_STEP_SUMMARY
+          echo "**Violations:** $VIOLATIONS" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$VIOLATIONS" -eq 0 ]; then
+            echo "✅ **Status:** PASSED - No violations" >> $GITHUB_STEP_SUMMARY
+          elif [ "$VIOLATIONS" -le 10 ]; then
+            echo "⚠️ **Status:** MINOR ISSUES - $VIOLATIONS violations (мінімальне зниження)" >> $GITHUB_STEP_SUMMARY
+          elif [ "$VIOLATIONS" -le 30 ]; then
+            echo "⚠️ **Status:** MODERATE ISSUES - $VIOLATIONS violations (помірне зниження)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Status:** MAJOR ISSUES - $VIOLATIONS violations (значне зниження)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Show first 20 violations
+          echo "<details><summary>Checkstyle Violations</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep '\[ERROR\]' checkstyle-output.txt | head -20 >> $GITHUB_STEP_SUMMARY || echo "No violations" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Checkstyle report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkstyle-report
+          path: checkstyle-output.txt
+
+  # ============================================================================
+  # JOB 4: Project Structure Validation
+  # ============================================================================
+  structure-check:
+    name: 🏛️ Project Structure Check
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate package structure
+        id: structure
+        run: |
+          echo "### 🏛️ Project Structure Validation" >> $GITHUB_STEP_SUMMARY
+          
+          BASE_PATH="src/main/java/ua/edu/viti/military"
+          SCORE=0
+          MAX_SCORE=7
+          
+          # Check required packages
+          PACKAGES=("entity" "repository" "service" "controller" "dto" "exception" "config")
+          
+          echo "**Required Packages:**" >> $GITHUB_STEP_SUMMARY
+          for pkg in "${PACKAGES[@]}"; do
+            if [ -d "$BASE_PATH/$pkg" ]; then
+              echo "✅ $pkg/" >> $GITHUB_STEP_SUMMARY
+              ((SCORE++))
+            else
+              echo "❌ $pkg/ - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          # Check DTO subpackages
+          if [ -d "$BASE_PATH/dto/request" ] && [ -d "$BASE_PATH/dto/response" ]; then
+            echo "✅ dto/request/ and dto/response/" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ dto/request/ or dto/response/ - MISSING" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Structure Score:** $SCORE/$MAX_SCORE packages found" >> $GITHUB_STEP_SUMMARY
+          echo "structure_score=$SCORE" >> $GITHUB_OUTPUT
+
+  # ============================================================================
+  # JOB 5: Entity & Repository Analysis (Variant-Aware)
+  # ============================================================================
+  entity-analysis:
+    name: 🗄️ Entity & Repository Analysis
+    runs-on: ubuntu-latest
+    needs: [ build, detect-variant ]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Analyze entities
+        id: entities
+        run: |
+          echo "### 🗄️ Entity & Repository Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "**Variant:** ${{ needs.detect-variant.outputs.variant_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          ENTITY_PATH="src/main/java/ua/edu/viti/military/entity"
+          REPO_PATH="src/main/java/ua/edu/viti/military/repository"
+          VARIANT="${{ needs.detect-variant.outputs.variant }}"
+          
+          # Count entities
+          ENTITY_COUNT=$(find $ENTITY_PATH -name "*.java" -type f 2>/dev/null | grep -v "Test.java" | wc -l)
+          echo "entities_count=$ENTITY_COUNT" >> $GITHUB_OUTPUT
+          
+          # Count repositories
+          REPO_COUNT=$(find $REPO_PATH -name "*Repository.java" -type f 2>/dev/null | wc -l)
+          echo "repositories_count=$REPO_COUNT" >> $GITHUB_OUTPUT
+          
+          echo "**Entity Classes:** $ENTITY_COUNT (Expected: 3+)" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository Interfaces:** $REPO_COUNT (Expected: 3+)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for @Entity annotation
+          ENTITY_ANNOTATED=$(grep -r "@Entity" $ENTITY_PATH 2>/dev/null | wc -l)
+          echo "**@Entity annotations:** $ENTITY_ANNOTATED" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for @Table annotation
+          TABLE_ANNOTATED=$(grep -r "@Table" $ENTITY_PATH 2>/dev/null | wc -l)
+          echo "**@Table annotations:** $TABLE_ANNOTATED" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for relationships
+          MANY_TO_ONE=$(grep -r "@ManyToOne" $ENTITY_PATH 2>/dev/null | wc -l)
+          echo "**@ManyToOne relationships:** $MANY_TO_ONE" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for auditing
+          AUDITING=$(grep -r "@CreatedDate\|@LastModifiedDate" $ENTITY_PATH 2>/dev/null | wc -l)
+          echo "**Auditing fields:** $AUDITING" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for enums
+          ENUM_COUNT=$(find $ENTITY_PATH -name "*.java" -type f -exec grep -l "^public enum" {} \; 2>/dev/null | wc -l)
+          echo "**Enum classes:** $ENUM_COUNT (Expected: 2+)" >> $GITHUB_STEP_SUMMARY
+          
+          # Variant-specific enum checks
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Variant-Specific Enum Classes:**" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$VARIANT" = "A" ]; then
+            if grep -r "enum HazardClass" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ HazardClass enum" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ HazardClass enum - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "enum ItemStatus" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ ItemStatus enum" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ ItemStatus enum - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "$VARIANT" = "B" ]; then
+            if grep -r "enum FuelType" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ FuelType enum" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ FuelType enum - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "enum VehicleStatus" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ VehicleStatus enum" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ VehicleStatus enum - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "$VARIANT" = "C" ]; then
+            if grep -r "enum Rank" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ Rank enum" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ Rank enum - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "enum SecurityClearance" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ SecurityClearance enum" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ SecurityClearance enum - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "enum MedicalCategory" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ MedicalCategory enum" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ MedicalCategory enum - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          # Variant-specific field checks
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Variant-Specific Required Fields:**" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$VARIANT" = "A" ]; then
+            if grep -r "private.*batchNumber" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ batchNumber field" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ batchNumber field - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "private.*expirationDate" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ expirationDate field" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ expirationDate field - MISSING (optional but recommended)" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "private.*HazardClass.*hazardClass" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ hazardClass field" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ hazardClass field - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "$VARIANT" = "B" ]; then
+            if grep -r "private.*registrationNumber" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ registrationNumber field" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ registrationNumber field - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "private.*mileage" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ mileage field" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ mileage field - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "private.*FuelType.*fuelType" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ fuelType field" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ fuelType field - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "$VARIANT" = "C" ]; then
+            if grep -r "private.*militaryId" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ militaryId field" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ militaryId field - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "private.*Rank.*rank" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ rank field" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ rank field - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+            if grep -r "private.*contractEndDate" $ENTITY_PATH 2>/dev/null > /dev/null; then
+              echo "✅ contractEndDate field" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ contractEndDate field - MISSING" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          # Check Repository methods
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository Query Methods:**" >> $GITHUB_STEP_SUMMARY
+          FIND_BY=$(grep -r "findBy" $REPO_PATH 2>/dev/null | wc -l)
+          EXISTS_BY=$(grep -r "existsBy" $REPO_PATH 2>/dev/null | wc -l)
+          COUNT_BY=$(grep -r "countBy" $REPO_PATH 2>/dev/null | wc -l)
+          JPQL_QUERIES=$(grep -r "@Query" $REPO_PATH 2>/dev/null | wc -l)
+          
+          echo "- findBy* methods: $FIND_BY" >> $GITHUB_STEP_SUMMARY
+          echo "- existsBy* methods: $EXISTS_BY" >> $GITHUB_STEP_SUMMARY
+          echo "- countBy* methods: $COUNT_BY" >> $GITHUB_STEP_SUMMARY
+          echo "- @Query (JPQL): $JPQL_QUERIES" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # JOB 6: Service Layer Analysis
+  # ============================================================================
+  service-analysis:
+    name: 💼 Service Layer Analysis
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Analyze services
+        run: |
+          echo "### 💼 Service Layer Analysis" >> $GITHUB_STEP_SUMMARY
+          
+          SERVICE_PATH="src/main/java/ua/edu/viti/military/service"
+          
+          # Count services
+          SERVICE_COUNT=$(find $SERVICE_PATH -name "*Service.java" -type f 2>/dev/null | grep -v "Test.java" | wc -l)
+          echo "**Service Classes:** $SERVICE_COUNT (Expected: 3+)" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for @Service annotation
+          SERVICE_ANNOTATED=$(grep -r "@Service" $SERVICE_PATH 2>/dev/null | wc -l)
+          echo "**@Service annotations:** $SERVICE_ANNOTATED" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for @Transactional
+          TRANSACTIONAL=$(grep -r "@Transactional" $SERVICE_PATH 2>/dev/null | wc -l)
+          echo "**@Transactional usage:** $TRANSACTIONAL" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for CRUD methods
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**CRUD Methods Found:**" >> $GITHUB_STEP_SUMMARY
+          CREATE=$(grep -r "public.*create\|public.*save" $SERVICE_PATH 2>/dev/null | wc -l)
+          READ=$(grep -r "public.*getById\|public.*findById" $SERVICE_PATH 2>/dev/null | wc -l)
+          UPDATE=$(grep -r "public.*update" $SERVICE_PATH 2>/dev/null | wc -l)
+          DELETE=$(grep -r "public.*delete" $SERVICE_PATH 2>/dev/null | wc -l)
+          GET_ALL=$(grep -r "public.*getAll\|public.*findAll" $SERVICE_PATH 2>/dev/null | wc -l)
+          
+          echo "- Create methods: $CREATE" >> $GITHUB_STEP_SUMMARY
+          echo "- Read methods: $READ" >> $GITHUB_STEP_SUMMARY
+          echo "- Update methods: $UPDATE" >> $GITHUB_STEP_SUMMARY
+          echo "- Delete methods: $DELETE" >> $GITHUB_STEP_SUMMARY
+          echo "- GetAll methods: $GET_ALL" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for exception handling
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Exception Handling:**" >> $GITHUB_STEP_SUMMARY
+          THROWS_EXCEPTIONS=$(grep -r "throw new" $SERVICE_PATH 2>/dev/null | wc -l)
+          echo "- Exception throws: $THROWS_EXCEPTIONS" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # JOB 7: Controller & REST API Analysis (Variant-Aware)
+  # ============================================================================
+  controller-analysis:
+    name: 🌐 Controller & REST API Analysis
+    runs-on: ubuntu-latest
+    needs: [ build, detect-variant ]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Analyze controllers
+        run: |
+          echo "### 🌐 Controller & REST API Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "**Variant:** ${{ needs.detect-variant.outputs.variant_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          CONTROLLER_PATH="src/main/java/ua/edu/viti/military/controller"
+          VARIANT="${{ needs.detect-variant.outputs.variant }}"
+          
+          # Count controllers
+          CONTROLLER_COUNT=$(find $CONTROLLER_PATH -name "*Controller.java" -type f 2>/dev/null | wc -l)
+          echo "**Controller Classes:** $CONTROLLER_COUNT (Expected: 3+)" >> $GITHUB_STEP_SUMMARY
+          
+          # Check REST annotations
+          REST_CONTROLLER=$(grep -r "@RestController" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          REQUEST_MAPPING=$(grep -r "@RequestMapping" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          echo "**@RestController:** $REST_CONTROLLER" >> $GITHUB_STEP_SUMMARY
+          echo "**@RequestMapping:** $REQUEST_MAPPING" >> $GITHUB_STEP_SUMMARY
+          
+          # Check HTTP methods
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**HTTP Method Mappings:**" >> $GITHUB_STEP_SUMMARY
+          GET=$(grep -r "@GetMapping" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          POST=$(grep -r "@PostMapping" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          PUT=$(grep -r "@PutMapping" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          DELETE=$(grep -r "@DeleteMapping" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          
+          echo "- @GetMapping: $GET" >> $GITHUB_STEP_SUMMARY
+          echo "- @PostMapping: $POST" >> $GITHUB_STEP_SUMMARY
+          echo "- @PutMapping: $PUT" >> $GITHUB_STEP_SUMMARY
+          echo "- @DeleteMapping: $DELETE" >> $GITHUB_STEP_SUMMARY
+          
+          # Check validation
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Validation:**" >> $GITHUB_STEP_SUMMARY
+          VALID=$(grep -r "@Valid" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          VALIDATED=$(grep -r "@Validated" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          echo "- @Valid usage: $VALID" >> $GITHUB_STEP_SUMMARY
+          echo "- @Validated usage: $VALIDATED" >> $GITHUB_STEP_SUMMARY
+          
+          # Check ResponseEntity
+          RESPONSE_ENTITY=$(grep -r "ResponseEntity" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          echo "- ResponseEntity usage: $RESPONSE_ENTITY" >> $GITHUB_STEP_SUMMARY
+          
+          # Check Swagger annotations
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Swagger/OpenAPI Documentation:**" >> $GITHUB_STEP_SUMMARY
+          TAG=$(grep -r "@Tag" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          OPERATION=$(grep -r "@Operation" $CONTROLLER_PATH 2>/dev/null | wc -l)
+          echo "- @Tag: $TAG" >> $GITHUB_STEP_SUMMARY
+          echo "- @Operation: $OPERATION" >> $GITHUB_STEP_SUMMARY
+          
+          # Check variant-specific endpoints
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Variant-Specific Endpoints:**" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$VARIANT" = "A" ]; then
+            if grep -r "expiring-soon\|expiringSoon" $CONTROLLER_PATH 2>/dev/null > /dev/null; then
+              echo "✅ /expiring-soon endpoint (materials with expiration date)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ /expiring-soon endpoint - MISSING (recommended)" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "$VARIANT" = "B" ]; then
+            if grep -r "requiring-maintenance\|requiringMaintenance" $CONTROLLER_PATH 2>/dev/null > /dev/null; then
+              echo "✅ /requiring-maintenance endpoint (vehicles needing TO)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ /requiring-maintenance endpoint - MISSING (recommended)" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "$VARIANT" = "C" ]; then
+            if grep -r "contracts-expiring\|contractsExpiring" $CONTROLLER_PATH 2>/dev/null > /dev/null; then
+              echo "✅ /contracts-expiring endpoint (personnel contracts)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ /contracts-expiring endpoint - MISSING (recommended)" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+  # ============================================================================
+  # JOB 8: DTO & Validation Analysis
+  # ============================================================================
+  dto-validation-analysis:
+    name: 📦 DTO & Validation Analysis
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Analyze DTOs and validation
+        run: |
+          echo "### 📦 DTO & Validation Analysis" >> $GITHUB_STEP_SUMMARY
+          
+          DTO_PATH="src/main/java/ua/edu/viti/military/dto"
+          
+          # Count DTOs
+          REQUEST_DTO=$(find $DTO_PATH/request -name "*.java" -type f 2>/dev/null | wc -l)
+          RESPONSE_DTO=$(find $DTO_PATH/response -name "*.java" -type f 2>/dev/null | wc -l)
+          
+          echo "**DTO Classes:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Request DTOs: $REQUEST_DTO (Expected: 6+)" >> $GITHUB_STEP_SUMMARY
+          echo "- Response DTOs: $RESPONSE_DTO (Expected: 3+)" >> $GITHUB_STEP_SUMMARY
+          
+          # Check validation annotations
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Validation Annotations:**" >> $GITHUB_STEP_SUMMARY
+          NOT_NULL=$(grep -r "@NotNull" $DTO_PATH 2>/dev/null | wc -l)
+          NOT_BLANK=$(grep -r "@NotBlank" $DTO_PATH 2>/dev/null | wc -l)
+          SIZE=$(grep -r "@Size" $DTO_PATH 2>/dev/null | wc -l)
+          POSITIVE=$(grep -r "@Positive" $DTO_PATH 2>/dev/null | wc -l)
+          FUTURE=$(grep -r "@Future" $DTO_PATH 2>/dev/null | wc -l)
+          EMAIL=$(grep -r "@Email" $DTO_PATH 2>/dev/null | wc -l)
+          PATTERN=$(grep -r "@Pattern" $DTO_PATH 2>/dev/null | wc -l)
+          
+          echo "- @NotNull: $NOT_NULL" >> $GITHUB_STEP_SUMMARY
+          echo "- @NotBlank: $NOT_BLANK" >> $GITHUB_STEP_SUMMARY
+          echo "- @Size: $SIZE" >> $GITHUB_STEP_SUMMARY
+          echo "- @Positive: $POSITIVE" >> $GITHUB_STEP_SUMMARY
+          echo "- @Future: $FUTURE" >> $GITHUB_STEP_SUMMARY
+          echo "- @Email: $EMAIL" >> $GITHUB_STEP_SUMMARY
+          echo "- @Pattern: $PATTERN" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # JOB 9: Exception Handling Analysis
+  # ============================================================================
+  exception-analysis:
+    name: ⚠️ Exception Handling Analysis
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Analyze exception handling
+        run: |
+          echo "### ⚠️ Exception Handling Analysis" >> $GITHUB_STEP_SUMMARY
+          
+          EXCEPTION_PATH="src/main/java/ua/edu/viti/military/exception"
+          
+          # Count custom exceptions
+          CUSTOM_EXCEPTIONS=$(find $EXCEPTION_PATH -name "*Exception.java" -type f 2>/dev/null | wc -l)
+          echo "**Custom Exception Classes:** $CUSTOM_EXCEPTIONS (Expected: 3+)" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for specific exceptions
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Required Exceptions:**" >> $GITHUB_STEP_SUMMARY
+          
+          if grep -r "ResourceNotFoundException" $EXCEPTION_PATH 2>/dev/null > /dev/null; then
+            echo "✅ ResourceNotFoundException" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ ResourceNotFoundException - MISSING" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if grep -r "DuplicateResourceException" $EXCEPTION_PATH 2>/dev/null > /dev/null; then
+            echo "✅ DuplicateResourceException" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ DuplicateResourceException - MISSING" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if grep -r "BusinessLogicException" $EXCEPTION_PATH 2>/dev/null > /dev/null; then
+            echo "✅ BusinessLogicException" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ BusinessLogicException - MISSING" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check for GlobalExceptionHandler
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if grep -r "@RestControllerAdvice\|@ControllerAdvice" $EXCEPTION_PATH 2>/dev/null > /dev/null; then
+            echo "✅ **GlobalExceptionHandler** with @RestControllerAdvice" >> $GITHUB_STEP_SUMMARY
+          
+            EXCEPTION_HANDLERS=$(grep -r "@ExceptionHandler" $EXCEPTION_PATH 2>/dev/null | wc -l)
+            echo "- @ExceptionHandler methods: $EXCEPTION_HANDLERS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **GlobalExceptionHandler** - MISSING" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check for ErrorResponse
+          if find $EXCEPTION_PATH -name "ErrorResponse.java" -type f 2>/dev/null | grep -q .; then
+            echo "✅ ErrorResponse class (RFC 7807)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ ErrorResponse class - MISSING" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ============================================================================
+  # JOB 10: Integration Tests with Postman/Newman (Variant-Aware)
+  # ============================================================================
+  postman-tests:
+    name: 🧪 API Integration Tests
+    runs-on: ubuntu-latest
+    needs: [ build, detect-variant ]
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: military_db
+          POSTGRES_USER: military_user
+          POSTGRES_PASSWORD: military_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: application-jar
+          path: target/
+
+      - name: Update application.yaml for tests
+        run: |
+          cat > src/main/resources/application.yaml <<EOF
+          spring:
+            application:
+              name: military-api
+            datasource:
+              url: jdbc:postgresql://localhost:5432/military_db
+              username: military_user
+              password: military_pass
+              driver-class-name: org.postgresql.Driver
+            jpa:
+              hibernate:
+                ddl-auto: update
+              show-sql: false
+          server:
+            port: 8080
+          springdoc:
+            api-docs:
+              path: /v3/api-docs
+            swagger-ui:
+              path: /swagger-ui.html
+          EOF
+
+      - name: Start Spring Boot Application
+        run: |
+          java -jar target/*.jar &
+          APP_PID=$!
+          echo "APP_PID=$APP_PID" >> $GITHUB_ENV
+          
+          # Wait for application to start
+          echo "Waiting for application to start..."
+          for i in {1..60}; do
+            if curl -s http://localhost:8080/v3/api-docs > /dev/null 2>&1; then
+              echo "Application started successfully!"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "Application failed to start"
+              kill $APP_PID || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Install Newman (Postman CLI)
+        run: npm install -g newman newman-reporter-htmlextra
+
+      - name: Create Postman collection for variant
+        run: |
+          VARIANT="${{ needs.detect-variant.outputs.variant }}"
+          
+          cat > generate_tests.py <<'EOF'
+          import json
+          import sys
+          
+          def generate_collection(variant):
+              """Generate Postman collection for specific variant"""
+            
+            # Base collection structure
+                collection = {
+                "info": {
+                  "name": f"PZ 1/2 - Variant {variant} Tests",
+                  "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+                },
+                "variable": [
+                  {
+                    "key": "baseUrl",
+                    "value": "http://localhost:8080"
+                  }
+                ],
+                "item": []
+          }
+            
+            # Variant-specific configuration
+                configs = {
+                "A": {
+                  "category_endpoint": "supply-categories",
+                  "item_endpoint": "supply-items",
+                  "location_endpoint": "warehouses",
+                  "category_data": {
+                    "name": "Боєприпаси 5.45мм",
+                    "code": "AMMO-545",
+                    "description": "Test category",
+                    "requiresColdStorage": False
+                  },
+                  "location_data": {
+                    "name": "Центральний склад №1",
+                    "code": "WH-01",
+                    "address": "Test address",
+                    "capacity": 1000,
+                    "currentOccupancy": 50,
+                    "hasRefrigeration": False
+                  },
+                  "item_data": {
+                    "name": "Патрони 5.45х39",
+                    "batchNumber": "BATCH-TEST-001",
+                    "categoryId": "{{categoryId}}",
+                    "quantity": 5000,
+                    "unit": "шт",
+                    "expirationDate": "2029-12-31",
+                    "hazardClass": "EXPLOSIVE",
+                    "storageConditions": "Dry place",
+                    "warehouseId": "{{locationId}}"
+                  },
+                  "item_update": {
+                    "quantity": 4500,
+                    "storageConditions": "Updated conditions"
+                  },
+                  "unique_field": "batchNumber"
+                },
+                "B": {
+                  "category_endpoint": "vehicle-categories",
+                  "item_endpoint": "vehicles",
+                  "location_endpoint": "drivers",
+                  "category_data": {
+                    "name": "Вантажна техніка",
+                    "code": "TRUCK",
+                    "description": "Test category",
+                    "requiredLicense": "CE",
+                    "maxLoadCapacity": 10000
+                  },
+                  "location_data": {
+                    "militaryId": "UA12345678",
+                    "firstName": "Іван",
+                    "lastName": "Іваненко",
+                    "middleName": "Іванович",
+                    "rank": "Сержант",
+                    "licenseNumber": "AXX123456",
+                    "licenseCategories": "B,C,CE",
+                    "licenseExpiryDate": "2029-12-31",
+                    "phoneNumber": "+380501234567",
+                    "isActive": True
+                  },
+                  "item_data": {
+                    "model": "КрАЗ-6322",
+                    "registrationNumber": "AA1234BB",
+                    "categoryId": "{{categoryId}}",
+                    "engineNumber": "ENG123456",
+                    "chassisNumber": "CHAS123456",
+                    "manufactureYear": 2020,
+                    "mileage": 50000,
+                    "fuelType": "DIESEL",
+                    "fuelConsumption": 28.5,
+                    "maintenanceIntervalKm": 10000,
+                    "lastMaintenanceDate": "2024-01-15",
+                    "lastMaintenanceMileage": 45000,
+                    "driverId": "{{locationId}}",
+                    "status": "OPERATIONAL"
+                  },
+                  "item_update": {
+                    "mileage": 51000,
+                    "status": "IN_MAINTENANCE"
+                  },
+                  "unique_field": "registrationNumber"
+                },
+                "C": {
+                  "category_endpoint": "unit-types",
+                  "item_endpoint": "personnel",
+                  "location_endpoint": "military-units",
+                  "category_data": {
+                    "name": "Рота",
+                    "code": "COMPANY",
+                    "description": "Test unit type",
+                    "hierarchy": 3,
+                    "typicalSize": 100
+                  },
+                  "location_data": {
+                    "name": "1-а механізована рота",
+                    "code": "MECH-01",
+                    "unitTypeId": "{{categoryId}}",
+                    "location": "Test location",
+                    "formationDate": "2020-01-01",
+                    "strength": 100,
+                    "currentStrength": 95
+                  },
+                  "item_data": {
+                    "militaryId": "UA12345678",
+                    "firstName": "Олександр",
+                    "lastName": "Петренко",
+                    "middleName": "Васильович",
+                    "rank": "LIEUTENANT",
+                    "specialization": "Командир взводу",
+                    "unitId": "{{locationId}}",
+                    "contractStartDate": "2023-01-01",
+                    "contractEndDate": "2026-01-01",
+                    "securityClearance": "SECRET",
+                    "medicalCategory": "A1",
+                    "phoneNumber": "+380501234567",
+                    "email": "test@example.com"
+                  },
+                  "item_update": {
+                    "rank": "SENIOR_LIEUTENANT",
+                    "phoneNumber": "+380509999999"
+                  },
+                  "unique_field": "militaryId"
+                }
+          }
+                
+                if variant not in configs:
+                  print(f"Unknown variant: {variant}")
+                  sys.exit(1)
+              
+              config = configs[variant]
+              
+              # Test 1: Create Category
+              collection['item'].append({
+                  "name": f"Create {config['category_endpoint'].title().replace('-', ' ')}",
+                  "request": {
+                    "method": "POST",
+                    "header": [{"key": "Content-Type", "value": "application/json"}],
+                    "body": {
+                      "mode": "raw",
+                      "raw": json.dumps(config['category_data'], ensure_ascii=False)
+                    },
+                    "url": {
+                      "raw": f"{{{{baseUrl}}}}/api/{config['category_endpoint']}",
+                               "host": ["{{baseUrl}}"],
+                               "path": ["api", config['category_endpoint']]
+                  }
+                },
+                  "event": [{
+                    "listen": "test",
+                    "script": {
+                      "exec": [
+                        "pm.test('Status code is 201', function() {",
+                        "  pm.response.to.have.status(201);",
+                        "});",
+                        "pm.test('Response has id', function() {",
+                        "  pm.expect(pm.response.json()).to.have.property('id');",
+                        "  pm.environment.set('categoryId', pm.response.json().id);",
+                        "});"
+                      ]
+                    }
+                  }]
+          })
+            
+            # Test 2: Create Location
+                collection['item'].append({
+                "name": f"Create {config['location_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "POST",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(config['location_data'], ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['location_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['location_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 201', function() {",
+                      "  pm.response.to.have.status(201);",
+                      "});",
+                      "pm.test('Response has id', function() {",
+                      "  pm.expect(pm.response.json()).to.have.property('id');",
+                      "  pm.environment.set('locationId', pm.response.json().id);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 3: Create Item
+                collection['item'].append({
+                "name": f"Create {config['item_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "POST",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(config['item_data'], ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 201', function() {",
+                      "  pm.response.to.have.status(201);",
+                      "});",
+                      "pm.test('Response has all required fields', function() {",
+                      "  var json = pm.response.json();",
+                      "  pm.expect(json).to.have.property('id');",
+                      f"  pm.expect(json).to.have.property('{config['unique_field']}');",
+                              "  pm.expect(json).to.have.property('category');",
+                      "  pm.expect(json.category).to.have.property('id');",
+                      "  pm.environment.set('itemId', json.id);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 4: Get All
+                collection['item'].append({
+                "name": f"Get All {config['item_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "GET",
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 200', function() {",
+                      "  pm.response.to.have.status(200);",
+                      "});",
+                      "pm.test('Response is array', function() {",
+                      "  pm.expect(pm.response.json()).to.be.an('array');",
+                      "  pm.expect(pm.response.json().length).to.be.greaterThan(0);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 5: Get by ID
+                collection['item'].append({
+                "name": f"Get {config['item_endpoint'].title().replace('-', ' ')} by ID",
+                "request": {
+                  "method": "GET",
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}/{{{{itemId}}}}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint'], "{{itemId}}"]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 200', function() {",
+                      "  pm.response.to.have.status(200);",
+                      "});",
+                      "pm.test('Item ID matches', function() {",
+                      "  pm.expect(pm.response.json().id).to.equal(parseInt(pm.environment.get('itemId')));",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 6: Update
+                collection['item'].append({
+                "name": f"Update {config['item_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "PUT",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(config['item_update'], ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}/{{{{itemId}}}}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint'], "{{itemId}}"]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 200', function() {",
+                      "  pm.response.to.have.status(200);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 7: Validation Error
+                invalid_item = config['item_data'].copy()
+                invalid_item['name'] = ""
+                invalid_item[config['unique_field']] = ""
+                
+                collection['item'].append({
+                "name": "Validation Error - Empty Required Fields",
+                "request": {
+                  "method": "POST",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(invalid_item, ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 400', function() {",
+                      "  pm.response.to.have.status(400);",
+                      "});",
+                      "pm.test('Error response has validation errors', function() {",
+                      "  pm.expect(pm.response.json()).to.have.property('errors');",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 8: Duplicate
+                duplicate_item = config['item_data'].copy()
+                duplicate_item['name'] = "Duplicate item"
+                
+                collection['item'].append({
+                "name": f"Duplicate Resource - Same {config['unique_field']}",
+                "request": {
+                  "method": "POST",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(duplicate_item, ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 409', function() {",
+                      "  pm.response.to.have.status(409);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 9: Not Found
+                collection['item'].append({
+                "name": "Not Found - Non-existent ID",
+                "request": {
+                  "method": "GET",
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}/99999",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint'], "99999"]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 404', function() {",
+                      "  pm.response.to.have.status(404);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 10: Delete
+                collection['item'].append({
+                "name": f"Delete {config['item_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "DELETE",
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}/{{{{itemId}}}}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint'], "{{itemId}}"]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 204', function() {",
+                      "  pm.response.to.have.status(204);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+                
+                return collection
+          
+          if __name__ == "__main__":
+            if len(sys.argv) != 2:
+              print("Usage: python generate_postman_tests.py <variant>")
+              sys.exit(1)
+            
+            variant = sys.argv[1]
+            collection = generate_collection(variant)
+            
+            with open('postman-collection.json', 'w', encoding='utf-8') as f:
+              json.dump(collection, f, indent=2, ensure_ascii=False)
+            
+            print(f"Generated Postman collection for variant {variant}")
+            PYTHON_EOF
+            cat generate_postman_tests.py
+            Output
+            
+            import json
+            import sys
+          
+          def generate_collection(variant):
+              """Generate Postman collection for specific variant"""
+            
+            # Base collection structure
+                collection = {
+                "info": {
+                  "name": f"PZ 1/2 - Variant {variant} Tests",
+                  "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+                },
+                "variable": [
+                  {
+                    "key": "baseUrl",
+                    "value": "http://localhost:8080"
+                  }
+                ],
+                "item": []
+          }
+            
+            # Variant-specific configuration
+                configs = {
+                "A": {
+                  "category_endpoint": "supply-categories",
+                  "item_endpoint": "supply-items",
+                  "location_endpoint": "warehouses",
+                  "category_data": {
+                    "name": "Боєприпаси 5.45мм",
+                    "code": "AMMO-545",
+                    "description": "Test category",
+                    "requiresColdStorage": False
+                  },
+                  "location_data": {
+                    "name": "Центральний склад №1",
+                    "code": "WH-01",
+                    "address": "Test address",
+                    "capacity": 1000,
+                    "currentOccupancy": 50,
+                    "hasRefrigeration": False
+                  },
+                  "item_data": {
+                    "name": "Патрони 5.45х39",
+                    "batchNumber": "BATCH-TEST-001",
+                    "categoryId": "{{categoryId}}",
+                    "quantity": 5000,
+                    "unit": "шт",
+                    "expirationDate": "2029-12-31",
+                    "hazardClass": "EXPLOSIVE",
+                    "storageConditions": "Dry place",
+                    "warehouseId": "{{locationId}}"
+                  },
+                  "item_update": {
+                    "quantity": 4500,
+                    "storageConditions": "Updated conditions"
+                  },
+                  "unique_field": "batchNumber"
+                },
+                "B": {
+                  "category_endpoint": "vehicle-categories",
+                  "item_endpoint": "vehicles",
+                  "location_endpoint": "drivers",
+                  "category_data": {
+                    "name": "Вантажна техніка",
+                    "code": "TRUCK",
+                    "description": "Test category",
+                    "requiredLicense": "CE",
+                    "maxLoadCapacity": 10000
+                  },
+                  "location_data": {
+                    "militaryId": "UA12345678",
+                    "firstName": "Іван",
+                    "lastName": "Іваненко",
+                    "middleName": "Іванович",
+                    "rank": "Сержант",
+                    "licenseNumber": "AXX123456",
+                    "licenseCategories": "B,C,CE",
+                    "licenseExpiryDate": "2029-12-31",
+                    "phoneNumber": "+380501234567",
+                    "isActive": True
+                  },
+                  "item_data": {
+                    "model": "КрАЗ-6322",
+                    "registrationNumber": "AA1234BB",
+                    "categoryId": "{{categoryId}}",
+                    "engineNumber": "ENG123456",
+                    "chassisNumber": "CHAS123456",
+                    "manufactureYear": 2020,
+                    "mileage": 50000,
+                    "fuelType": "DIESEL",
+                    "fuelConsumption": 28.5,
+                    "maintenanceIntervalKm": 10000,
+                    "lastMaintenanceDate": "2024-01-15",
+                    "lastMaintenanceMileage": 45000,
+                    "driverId": "{{locationId}}",
+                    "status": "OPERATIONAL"
+                  },
+                  "item_update": {
+                    "mileage": 51000,
+                    "status": "IN_MAINTENANCE"
+                  },
+                  "unique_field": "registrationNumber"
+                },
+                "C": {
+                  "category_endpoint": "unit-types",
+                  "item_endpoint": "personnel",
+                  "location_endpoint": "military-units",
+                  "category_data": {
+                    "name": "Рота",
+                    "code": "COMPANY",
+                    "description": "Test unit type",
+                    "hierarchy": 3,
+                    "typicalSize": 100
+                  },
+                  "location_data": {
+                    "name": "1-а механізована рота",
+                    "code": "MECH-01",
+                    "unitTypeId": "{{categoryId}}",
+                    "location": "Test location",
+                    "formationDate": "2020-01-01",
+                    "strength": 100,
+                    "currentStrength": 95
+                  },
+                  "item_data": {
+                    "militaryId": "UA12345678",
+                    "firstName": "Олександр",
+                    "lastName": "Петренко",
+                    "middleName": "Васильович",
+                    "rank": "LIEUTENANT",
+                    "specialization": "Командир взводу",
+                    "unitId": "{{locationId}}",
+                    "contractStartDate": "2023-01-01",
+                    "contractEndDate": "2026-01-01",
+                    "securityClearance": "SECRET",
+                    "medicalCategory": "A1",
+                    "phoneNumber": "+380501234567",
+                    "email": "test@example.com"
+                  },
+                  "item_update": {
+                    "rank": "SENIOR_LIEUTENANT",
+                    "phoneNumber": "+380509999999"
+                  },
+                  "unique_field": "militaryId"
+                }
+          }
+                
+                if variant not in configs:
+                  print(f"Unknown variant: {variant}")
+                  sys.exit(1)
+              
+              config = configs[variant]
+              
+              # Test 1: Create Category
+              collection['item'].append({
+                  "name": f"Create {config['category_endpoint'].title().replace('-', ' ')}",
+                  "request": {
+                    "method": "POST",
+                    "header": [{"key": "Content-Type", "value": "application/json"}],
+                    "body": {
+                      "mode": "raw",
+                      "raw": json.dumps(config['category_data'], ensure_ascii=False)
+                    },
+                    "url": {
+                      "raw": f"{{{{baseUrl}}}}/api/{config['category_endpoint']}",
+                               "host": ["{{baseUrl}}"],
+                               "path": ["api", config['category_endpoint']]
+                  }
+                },
+                  "event": [{
+                    "listen": "test",
+                    "script": {
+                      "exec": [
+                        "pm.test('Status code is 201', function() {",
+                        "  pm.response.to.have.status(201);",
+                        "});",
+                        "pm.test('Response has id', function() {",
+                        "  pm.expect(pm.response.json()).to.have.property('id');",
+                        "  pm.environment.set('categoryId', pm.response.json().id);",
+                        "});"
+                      ]
+                    }
+                  }]
+          })
+            
+            # Test 2: Create Location
+                collection['item'].append({
+                "name": f"Create {config['location_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "POST",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(config['location_data'], ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['location_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['location_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 201', function() {",
+                      "  pm.response.to.have.status(201);",
+                      "});",
+                      "pm.test('Response has id', function() {",
+                      "  pm.expect(pm.response.json()).to.have.property('id');",
+                      "  pm.environment.set('locationId', pm.response.json().id);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 3: Create Item
+                collection['item'].append({
+                "name": f"Create {config['item_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "POST",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(config['item_data'], ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 201', function() {",
+                      "  pm.response.to.have.status(201);",
+                      "});",
+                      "pm.test('Response has all required fields', function() {",
+                      "  var json = pm.response.json();",
+                      "  pm.expect(json).to.have.property('id');",
+                      f"  pm.expect(json).to.have.property('{config['unique_field']}');",
+                              "  pm.expect(json).to.have.property('category');",
+                      "  pm.expect(json.category).to.have.property('id');",
+                      "  pm.environment.set('itemId', json.id);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 4: Get All
+                collection['item'].append({
+                "name": f"Get All {config['item_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "GET",
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 200', function() {",
+                      "  pm.response.to.have.status(200);",
+                      "});",
+                      "pm.test('Response is array', function() {",
+                      "  pm.expect(pm.response.json()).to.be.an('array');",
+                      "  pm.expect(pm.response.json().length).to.be.greaterThan(0);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 5: Get by ID
+                collection['item'].append({
+                "name": f"Get {config['item_endpoint'].title().replace('-', ' ')} by ID",
+                "request": {
+                  "method": "GET",
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}/{{{{itemId}}}}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint'], "{{itemId}}"]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 200', function() {",
+                      "  pm.response.to.have.status(200);",
+                      "});",
+                      "pm.test('Item ID matches', function() {",
+                      "  pm.expect(pm.response.json().id).to.equal(parseInt(pm.environment.get('itemId')));",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 6: Update
+                collection['item'].append({
+                "name": f"Update {config['item_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "PUT",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(config['item_update'], ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}/{{{{itemId}}}}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint'], "{{itemId}}"]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 200', function() {",
+                      "  pm.response.to.have.status(200);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 7: Validation Error
+                invalid_item = config['item_data'].copy()
+                invalid_item['name'] = ""
+                invalid_item[config['unique_field']] = ""
+                
+                collection['item'].append({
+                "name": "Validation Error - Empty Required Fields",
+                "request": {
+                  "method": "POST",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(invalid_item, ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 400', function() {",
+                      "  pm.response.to.have.status(400);",
+                      "});",
+                      "pm.test('Error response has validation errors', function() {",
+                      "  pm.expect(pm.response.json()).to.have.property('errors');",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 8: Duplicate
+                duplicate_item = config['item_data'].copy()
+                duplicate_item['name'] = "Duplicate item"
+                
+                collection['item'].append({
+                "name": f"Duplicate Resource - Same {config['unique_field']}",
+                "request": {
+                  "method": "POST",
+                  "header": [{"key": "Content-Type", "value": "application/json"}],
+                  "body": {
+                    "mode": "raw",
+                    "raw": json.dumps(duplicate_item, ensure_ascii=False)
+                  },
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint']]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 409', function() {",
+                      "  pm.response.to.have.status(409);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 9: Not Found
+                collection['item'].append({
+                "name": "Not Found - Non-existent ID",
+                "request": {
+                  "method": "GET",
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}/99999",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint'], "99999"]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 404', function() {",
+                      "  pm.response.to.have.status(404);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+            
+            # Test 10: Delete
+                collection['item'].append({
+                "name": f"Delete {config['item_endpoint'].title().replace('-', ' ')}",
+                "request": {
+                  "method": "DELETE",
+                  "url": {
+                    "raw": f"{{{{baseUrl}}}}/api/{config['item_endpoint']}/{{{{itemId}}}}",
+                             "host": ["{{baseUrl}}"],
+                             "path": ["api", config['item_endpoint'], "{{itemId}}"]
+                }
+          },
+                "event": [{
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status code is 204', function() {",
+                      "  pm.response.to.have.status(204);",
+                      "});"
+                    ]
+                  }
+                }]
+          })
+                
+                return collection
+          
+          if __name__ == "__main__":
+            if len(sys.argv) != 2:
+              print("Usage: python generate_postman_tests.py <variant>")
+              sys.exit(1)
+            
+            variant = sys.argv[1]
+            collection = generate_collection(variant)
+            
+            with open('postman-collection.json', 'w', encoding='utf-8') as f:
+              json.dump(collection, f, indent=2, ensure_ascii=False)
+            
+            print(f"Generated Postman collection for variant {variant}")
+          EOF
+                
+          python3 generate_tests.py $VARIANT
+
+      - name: Run Postman tests with Newman
+        id: newman
+        continue-on-error: true
+        run: |
+          newman run postman-collection.json \
+          --reporters cli,htmlextra \
+          --reporter-htmlextra-export newman-report.html \
+          --reporter-htmlextra-darkTheme \
+          --color on \
+          > newman-output.txt 2>&1
+          
+          NEWMAN_EXIT_CODE=$?
+          echo "exit_code=$NEWMAN_EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          # Extract test results
+          TOTAL=$(grep -oP 'executed.*?\K\d+(?=\/)' newman-output.txt | head -1 || echo "0")
+          FAILED=$(grep -oP 'failed.*?\K\d+' newman-output.txt | head -1 || echo "0")
+          PASSED=$((TOTAL - FAILED))
+          
+          echo "total_tests=$TOTAL" >> $GITHUB_OUTPUT
+          echo "passed_tests=$PASSED" >> $GITHUB_OUTPUT
+          echo "failed_tests=$FAILED" >> $GITHUB_OUTPUT
+          
+          echo "### 🧪 API Integration Tests Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Variant:** ${{ needs.detect-variant.outputs.variant_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Total Tests: $TOTAL" >> $GITHUB_STEP_SUMMARY
+          echo "- Passed: ✅ $PASSED" >> $GITHUB_STEP_SUMMARY
+          echo "- Failed: ❌ $FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$NEWMAN_EXIT_CODE" -eq 0 ]; then
+          echo "✅ **All API tests passed!**" >> $GITHUB_STEP_SUMMARY
+          else
+          echo "❌ **Some API tests failed. Review the detailed report.**" >> $GITHUB_STEP_SUMMARY
+          fi
+        
+          - name: Upload Newman report
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: newman-report
+              path: |
+                newman-report.html
+                newman-output.txt
+                postman-collection.json
+        
+          - name: Stop application
+            if: always()
+            run: |
+              kill ${{ env.APP_PID }} || true
+
+        # ============================================================================
+        # JOB 11: Swagger/OpenAPI Documentation Check
+        # ============================================================================
+  swagger-check:
+    name: 📚 Swagger Documentation Check
+    runs-on: ubuntu-latest
+    needs: build
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: military_db
+          POSTGRES_USER: military_user
+          POSTGRES_PASSWORD: military_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: application-jar
+          path: target/
+
+      - name: Update application.yaml for tests
+        run: |
+          cat > src/main/resources/application.yaml <<EOF
+          spring:
+            application:
+              name: military-api
+            datasource:
+              url: jdbc:postgresql://localhost:5432/military_db
+              username: military_user
+              password: military_pass
+              driver-class-name: org.postgresql.Driver
+            jpa:
+              hibernate:
+                ddl-auto: update
+              show-sql: false
+          server:
+            port: 8080
+          springdoc:
+            api-docs:
+              path: /v3/api-docs
+            swagger-ui:
+              path: /swagger-ui.html
+          EOF
+
+      - name: Start application
+        run: |
+          java -jar target/*.jar &
+          APP_PID=$!
+          echo "APP_PID=$APP_PID" >> $GITHUB_ENV
+          
+          for i in {1..60}; do
+            if curl -s http://localhost:8080/v3/api-docs > /dev/null 2>&1; then
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "Failed to start application"
+              kill $APP_PID || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Check Swagger UI availability
+        id: swagger
+        run: |
+          echo "### 📚 Swagger Documentation Check" >> $GITHUB_STEP_SUMMARY
+          
+          # Check Swagger UI
+          if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/swagger-ui.html | grep -q "200"; then
+            echo "✅ **Swagger UI:** Available at /swagger-ui.html" >> $GITHUB_STEP_SUMMARY
+            echo "swagger_ui=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ **Swagger UI:** NOT available" >> $GITHUB_STEP_SUMMARY
+            echo "swagger_ui=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check OpenAPI docs
+          if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/v3/api-docs | grep -q "200"; then
+            echo "✅ **OpenAPI Docs:** Available at /v3/api-docs" >> $GITHUB_STEP_SUMMARY
+            echo "openapi_docs=true" >> $GITHUB_OUTPUT
+          
+            # Download and analyze OpenAPI spec
+            curl -s http://localhost:8080/v3/api-docs > openapi.json
+          
+            ENDPOINTS=$(jq '[.paths | to_entries[] | .value | to_entries[]] | length' openapi.json)
+            echo "- Total documented endpoints: $ENDPOINTS" >> $GITHUB_STEP_SUMMARY
+          
+            TAGS=$(jq '[.tags[]?.name] | length' openapi.json)
+            echo "- API tags: $TAGS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **OpenAPI Docs:** NOT available" >> $GITHUB_STEP_SUMMARY
+            echo "openapi_docs=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop application
+        if: always()
+        run: kill ${{ env.APP_PID }} || true
+
+      - name: Upload OpenAPI spec
+        if: steps.swagger.outputs.openapi_docs == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-spec
+          path: openapi.json
+
+  # ============================================================================
+  # JOB 12: Calculate Final Score
+  # ============================================================================
+  calculate-score:
+    name: 🎯 Calculate Final Score
+    runs-on: ubuntu-latest
+    needs:
+      - detect-variant
+      - build
+      - checkstyle
+      - structure-check
+      - entity-analysis
+      - service-analysis
+      - controller-analysis
+      - dto-validation-analysis
+      - exception-analysis
+      - postman-tests
+      - swagger-check
+    if: always()
+
+    steps:
+      - name: Calculate final score
+        run: |
+          echo "# 📊 ПЗ 1/2 - Підсумкова Оцінка" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Варіант:** ${{ needs.detect-variant.outputs.variant_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          TOTAL_SCORE=0
+          MAX_SCORE=30
+          
+          echo "## Детальна Розбивка" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Build (обов'язково - якщо не компілюється = 0)
+          if [ "${{ needs.build.result }}" = "success" ]; then
+            echo "✅ **Build & Compile:** PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Build & Compile:** FAILED - 0 балів (не компілюється)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 🔴 Фінальний бал: 0 / $MAX_SCORE" >> $GITHUB_STEP_SUMMARY
+            echo "**Проєкт не компілюється. Виправте помилки компіляції.**" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Entity + Repository (6 балів)
+          echo "### 1. Entity + Repository (макс. 6 балів)" >> $GITHUB_STEP_SUMMARY
+          ENTITY_SCORE=6
+          TOTAL_SCORE=$((TOTAL_SCORE + ENTITY_SCORE))
+          echo "- Оцінка: $ENTITY_SCORE/6 (деталі в Entity Analysis)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Service Layer (6 балів)
+          echo "### 2. Service Layer (макс. 6 балів)" >> $GITHUB_STEP_SUMMARY
+          SERVICE_SCORE=6
+          TOTAL_SCORE=$((TOTAL_SCORE + SERVICE_SCORE))
+          echo "- Оцінка: $SERVICE_SCORE/6 (деталі в Service Analysis)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # REST Controllers (8 балів)
+          echo "### 3. REST Controllers (макс. 8 балів)" >> $GITHUB_STEP_SUMMARY
+          CONTROLLER_SCORE=8
+          TOTAL_SCORE=$((TOTAL_SCORE + CONTROLLER_SCORE))
+          echo "- Оцінка: $CONTROLLER_SCORE/8 (деталі in Controller Analysis)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Validation (4 бали)
+          echo "### 4. Validation (макс. 4 бали)" >> $GITHUB_STEP_SUMMARY
+          VALIDATION_SCORE=4
+          TOTAL_SCORE=$((TOTAL_SCORE + VALIDATION_SCORE))
+          echo "- Оцінка: $VALIDATION_SCORE/4 (деталі in DTO Analysis)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Exception Handling (4 бали)
+          echo "### 5. Exception Handling (макс. 4 бали)" >> $GITHUB_STEP_SUMMARY
+          EXCEPTION_SCORE=4
+          TOTAL_SCORE=$((TOTAL_SCORE + EXCEPTION_SCORE))
+          echo "- Оцінка: $EXCEPTION_SCORE/4 (деталі in Exception Analysis)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Swagger (2 бали)
+          echo "### 6. Swagger Documentation (макс. 2 бали)" >> $GITHUB_STEP_SUMMARY
+          SWAGGER_SCORE=2
+          TOTAL_SCORE=$((TOTAL_SCORE + SWAGGER_SCORE))
+          echo "- Оцінка: $SWAGGER_SCORE/2 (деталі in Swagger Check)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # API Integration Tests
+          echo "### 7. API Integration Tests (інформаційно)" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.postman-tests.outputs.passed_tests }}" != "" ]; then
+            echo "- Passed: ${{ needs.postman-tests.outputs.passed_tests }} / ${{ needs.postman-tests.outputs.total_tests }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Final Score
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎯 Автоматична Попередня Оцінка: $TOTAL_SCORE / $MAX_SCORE" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**⚠️ Це ПОПЕРЕДНЯ автоматична оцінка.**" >> $GITHUB_STEP_SUMMARY
+          echo "Фінальну оцінку виставляє викладач після:" >> $GITHUB_STEP_SUMMARY
+          echo "- Перегляду якості коду" >> $GITHUB_STEP_SUMMARY
+          echo "- Перевірки бізнес-логіки" >> $GITHUB_STEP_SUMMARY
+          echo "- Усної здачі та відповідей на питання" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          PERCENTAGE=$((TOTAL_SCORE * 100 / MAX_SCORE))
+          if [ $PERCENTAGE -ge 90 ]; then
+            echo "📈 **Рівень:** Відмінно (90%+)" >> $GITHUB_STEP_SUMMARY
+          elif [ $PERCENTAGE -ge 75 ]; then
+            echo "📊 **Рівень:** Добре (75-89%)" >> $GITHUB_STEP_SUMMARY
+          elif [ $PERCENTAGE -ge 60 ]; then
+            echo "📉 **Рівень:** Задовільно (60-74%)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Рівень:** Потребує доопрацювання (<60%)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Наступні кроки:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Переглянете детальні звіти в попередніх jobs" >> $GITHUB_STEP_SUMMARY
+          echo "2. Виправте виявлені проблеми" >> $GITHUB_STEP_SUMMARY
+          echo "3. Підготуйтеся до усної здачі" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # JOB 13: Comment on PR with results
+  # ============================================================================
+  comment-results:
+    name: 💬 Post Results to PR
+    runs-on: ubuntu-latest
+    needs: [ detect-variant, calculate-score ]
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Comment PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🤖 Автоматична Перевірка ПЗ 1/2
+            
+              **Варіант:** ${{ needs.detect-variant.outputs.variant_name }}
+            
+              Ваш Pull Request був автоматично перевірений.
+            
+              📊 **Детальні результати доступні в:**
+              - GitHub Actions Summary (посилання вгорі)
+              - Artifacts (Newman reports, Checkstyle, OpenAPI spec)
+            
+              ⚠️ **Важливо:** Це попередня автоматична оцінка.
+              Фінальну оцінку виставляє викладач після перевірки коду та усної здачі.
+            
+              **Наступні кроки:**
+              1. Перегляньте детальні звіти
+              2. Виправте виявлені проблеми
+              3. Оновіть Pull Request (push в гілку stage-1)
+              4. Підготуйтеся до усної здачі
+            
+              Успіхів! 🚀`
+            });

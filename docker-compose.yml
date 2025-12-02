@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: military-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: military_db
+      POSTGRES_USER: military_user
+      POSTGRES_PASSWORD: military_pass
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U military_user -d military_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - military-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  military-network:
+    driver: bridge
