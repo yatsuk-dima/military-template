@@ -2,11 +2,13 @@ package ua.edu.viti.military;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 
 @SpringBootApplication
-public class MilitaryApplication {
+@EnableJpaAuditing
+public class MilitarySupplyApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(MilitaryApplication.class, args);
+        SpringApplication.run(MilitarySupplyApplication.class, args);
     }
 }
