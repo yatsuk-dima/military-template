@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- 1. Створення схеми -->
+    <include file="db/changelog/changes/001-create-categories.xml"/>
+    <include file="db/changelog/changes/003-create-warehouses.xml"/>
+    <include file="db/changelog/changes/002-create-items.xml"/>
+    <include file="db/changelog/changes/004-create-movement-log.xml"/>
+    <include file="db/changelog/changes/005-create-users-roles.xml"/>
+    <include file="db/changelog/changes/006-add-indexes.xml"/>
+
+    <!-- 2. Початкові дані -->
+    <include file="db/changelog/data/seed-categories.xml"/>
+    <include file="db/changelog/data/seed-test-data.xml"/>
+
+</databaseChangeLog>

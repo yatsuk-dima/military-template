@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="005-add-indexes" author="system">
+        <comment>Додавання індексів для покращення продуктивності</comment>
+
+        <!-- Індекси для supply_categories -->
+        <createIndex indexName="idx_supply_categories_code" tableName="supply_categories">
+            <column name="code"/>
+        </createIndex>
+
+        <!-- Індекси для warehouses -->
+        <createIndex indexName="idx_warehouses_code" tableName="warehouses">
+            <column name="code"/>
+        </createIndex>
+
+        <!-- Індекси для supply_items -->
+        <createIndex indexName="idx_supply_items_category_id" tableName="supply_items">
+            <column name="category_id"/>
+        </createIndex>
+
+        <createIndex indexName="idx_supply_items_warehouse_id" tableName="supply_items">
+            <column name="warehouse_id"/>
+        </createIndex>
+
+        <createIndex indexName="idx_supply_items_status" tableName="supply_items">
+            <column name="status"/>
+        </createIndex>
+
+        <createIndex indexName="idx_supply_items_batch_number" tableName="supply_items">
+            <column name="batch_number"/>
+        </createIndex>
+
+        <rollback>
+            <dropIndex indexName="idx_supply_categories_code" tableName="supply_categories"/>
+            <dropIndex indexName="idx_warehouses_code" tableName="warehouses"/>
+            <dropIndex indexName="idx_supply_items_category_id" tableName="supply_items"/>
+            <dropIndex indexName="idx_supply_items_warehouse_id" tableName="supply_items"/>
+            <dropIndex indexName="idx_supply_items_status" tableName="supply_items"/>
+            <dropIndex indexName="idx_supply_items_batch_number" tableName="supply_items"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

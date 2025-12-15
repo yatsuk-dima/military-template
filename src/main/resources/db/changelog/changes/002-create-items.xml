@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="002-create-supply-items" author="system">
+        <comment>Створення таблиці матеріалів МТЗ</comment>
+
+        <createTable tableName="supply_items">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(200)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="batch_number" type="VARCHAR(50)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="category_id" type="BIGINT">
+                <constraints nullable="false" foreignKeyName="fk_supply_items_category"
+                            references="supply_categories(id)"/>
+            </column>
+            <column name="quantity" type="INTEGER">
+                <constraints nullable="false"/>
+            </column>
+            <column name="unit" type="VARCHAR(20)"/>
+            <column name="expiration_date" type="DATE"/>
+            <column name="hazard_class" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="storage_conditions" type="VARCHAR(200)"/>
+            <column name="warehouse_id" type="BIGINT">
+                <constraints foreignKeyName="fk_supply_items_warehouse"
+                            references="warehouses(id)"/>
+            </column>
+            <column name="status" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <rollback>
+            <dropTable tableName="supply_items"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

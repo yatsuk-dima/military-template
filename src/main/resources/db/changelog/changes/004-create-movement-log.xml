@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="004-create-supply-movements" author="system">
+        <comment>Створення журналу операцій з матеріалами</comment>
+
+        <createTable tableName="supply_movements">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+
+            <column name="item_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="type" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="quantity" type="INTEGER">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="recipient_name" type="VARCHAR(100)"/>
+
+            <column name="recipient_unit" type="VARCHAR(50)"/>
+
+            <column name="notes" type="VARCHAR(500)"/>
+
+            <column name="performed_by" type="VARCHAR(100)"/>
+
+            <column name="performed_at" type="TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="version" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addForeignKeyConstraint
+            baseTableName="supply_movements"
+            baseColumnNames="item_id"
+            referencedTableName="supply_items"
+            referencedColumnNames="id"
+            constraintName="fk_movements_item"
+            onDelete="RESTRICT"/>
+
+        <!-- Індекс для пошуку по item -->
+        <createIndex indexName="idx_movements_item" tableName="supply_movements">
+            <column name="item_id"/>
+        </createIndex>
+
+        <!-- Індекс для пошуку по типу операції -->
+        <createIndex indexName="idx_movements_type" tableName="supply_movements">
+            <column name="type"/>
+        </createIndex>
+
+        <!-- Індекс для пошуку по даті (новіші спочатку) -->
+        <createIndex indexName="idx_movements_date" tableName="supply_movements">
+            <column name="performed_at" descending="true"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="supply_movements"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

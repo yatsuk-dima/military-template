@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="seed-test-warehouses" author="system">
+        <comment>Додавання тестових складів</comment>
+
+        <insert tableName="warehouses">
+            <column name="name" value="Центральний склад №1"/>
+            <column name="code" value="WH-001"/>
+            <column name="address" value="м. Київ, вул. Військова, 1"/>
+            <column name="capacity" valueNumeric="10000"/>
+            <column name="current_occupancy" valueNumeric="2500"/>
+            <column name="has_refrigeration" valueBoolean="true"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+
+        <insert tableName="warehouses">
+            <column name="name" value="Польовий склад №2"/>
+            <column name="code" value="WH-002"/>
+            <column name="address" value="м. Львів, вул. Стрілецька, 15"/>
+            <column name="capacity" valueNumeric="5000"/>
+            <column name="current_occupancy" valueNumeric="1200"/>
+            <column name="has_refrigeration" valueBoolean="false"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+
+        <rollback>
+            <delete tableName="warehouses">
+                <where>code IN ('WH-001', 'WH-002')</where>
+            </delete>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="seed-test-items" author="system">
+        <comment>Додавання тестових матеріалів</comment>
+
+        <insert tableName="supply_items">
+            <column name="name" value="Патрони 5.45x39"/>
+            <column name="batch_number" value="BATCH-2024-001"/>
+            <column name="category_id" valueComputed="(SELECT id FROM supply_categories WHERE code = 'AMMO')"/>
+            <column name="quantity" valueNumeric="10000"/>
+            <column name="unit" value="шт"/>
+            <column name="expiration_date" valueDate="2030-12-31"/>
+            <column name="hazard_class" value="EXPLOSIVE"/>
+            <column name="storage_conditions" value="Сухе приміщення, температура +5 до +25°C"/>
+            <column name="warehouse_id" valueComputed="(SELECT id FROM warehouses WHERE code = 'WH-001')"/>
+            <column name="status" value="IN_STOCK"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+
+        <insert tableName="supply_items">
+            <column name="name" value="Аптечка індивідуальна"/>
+            <column name="batch_number" value="BATCH-2024-002"/>
+            <column name="category_id" valueComputed="(SELECT id FROM supply_categories WHERE code = 'MED')"/>
+            <column name="quantity" valueNumeric="500"/>
+            <column name="unit" value="шт"/>
+            <column name="expiration_date" valueDate="2026-06-30"/>
+            <column name="hazard_class" value="NON_HAZARDOUS"/>
+            <column name="storage_conditions" value="Прохолодне місце, +2 до +8°C"/>
+            <column name="warehouse_id" valueComputed="(SELECT id FROM warehouses WHERE code = 'WH-001')"/>
+            <column name="status" value="IN_STOCK"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+
+        <rollback>
+            <delete tableName="supply_items">
+                <where>batch_number IN ('BATCH-2024-001', 'BATCH-2024-002')</where>
+            </delete>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

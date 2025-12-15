@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="seed-categories" author="system">
+        <comment>Додавання початкових категорій МТЗ</comment>
+
+        <insert tableName="supply_categories">
+            <column name="name" value="Боєприпаси"/>
+            <column name="code" value="AMMO"/>
+            <column name="description" value="Боєприпаси різних калібрів"/>
+            <column name="requires_cold_storage" valueBoolean="false"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+
+        <insert tableName="supply_categories">
+            <column name="name" value="Медикаменти"/>
+            <column name="code" value="MED"/>
+            <column name="description" value="Медичні препарати та обладнання"/>
+            <column name="requires_cold_storage" valueBoolean="true"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+
+        <insert tableName="supply_categories">
+            <column name="name" value="Продовольство"/>
+            <column name="code" value="FOOD"/>
+            <column name="description" value="Продукти харчування"/>
+            <column name="requires_cold_storage" valueBoolean="true"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+
+        <insert tableName="supply_categories">
+            <column name="name" value="Паливо"/>
+            <column name="code" value="FUEL"/>
+            <column name="description" value="Пально-мастильні матеріали"/>
+            <column name="requires_cold_storage" valueBoolean="false"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+
+        <insert tableName="supply_categories">
+            <column name="name" value="Обмундирування"/>
+            <column name="code" value="UNIFORM"/>
+            <column name="description" value="Військова форма та екіпірування"/>
+            <column name="requires_cold_storage" valueBoolean="false"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+
+        <rollback>
+            <delete tableName="supply_categories">
+                <where>code IN ('AMMO', 'MED', 'FOOD', 'FUEL', 'UNIFORM')</where>
+            </delete>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
