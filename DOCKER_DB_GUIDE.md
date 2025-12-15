@@ -16,8 +16,7 @@
 
 **Windows:**
 - Завантажте Docker Desktop з https://www.docker.com/products/docker-desktop
-- Встановіть та перезавантажте комп'ютер
-- Запустіть Docker Desktop
+- Встановіть, перезавантажте комп'ютер і запустіть Docker Desktop
 
 **Linux:**
 ```bash
@@ -30,10 +29,11 @@ sudo systemctl enable docker
 ### 2. Запустіть базу даних
 
 ```bash
-# Перейдіть в папку проєкту
-cd D:/work/military-warehouse-template
+# Перейдіть у папку проєкту (замість <шлях_до_проєкту> вкажіть свій шлях)
+cd <шлях_до_проєкту>
 
 # Запустіть контейнери
+# (для Windows PowerShell використовуйте docker-compose, а не docker compose)
 docker-compose up -d
 
 # Перевірте статус
@@ -125,74 +125,24 @@ docker-compose exec postgres psql -U warehouse_user -d warehouse_db
 ### Резервне копіювання та відновлення
 
 ```bash
-# Створити backup
+# Створити backup (Linux/macOS)
 docker-compose exec postgres pg_dump -U warehouse_user warehouse_db > backup.sql
 
-# Відновити з backup
+# Створити backup (Windows PowerShell)
+docker-compose exec postgres pg_dump -U warehouse_user warehouse_db | Out-File -Encoding utf8 backup.sql
+
+# Відновити з backup (Linux/macOS)
 docker-compose exec -T postgres psql -U warehouse_user warehouse_db < backup.sql
+
+# Відновити з backup (Windows PowerShell)
+Get-Content backup.sql | docker-compose exec -T postgres psql -U warehouse_user warehouse_db
 ```
-
----
-
-## 🔌 Підключення з IntelliJ IDEA
-
-### 1. Відкрийте Database панель
-- View → Tool Windows → Database (або Alt+1)
-
-### 2. Додайте нове підключення
-- Натисніть "+" → Data Source → PostgreSQL
-
-### 3. Введіть параметри:
-```
-Host: localhost
-Port: 5432
-Database: warehouse_db
-User: warehouse_user
-Password: warehouse_pass
-```
-
-### 4. Тестуйте підключення
-- Натисніть "Test Connection"
-- Якщо потрібно, завантажте драйвери PostgreSQL
-
----
-
-## 🌐 Використання pgAdmin
-
-### 1. Відкрийте браузер
-```
-http://localhost:5050
-```
-
-### 2. Увійдіть
-```
-Email: admin@warehouse.local
-Password: admin
-```
-
-### 3. Додайте сервер
-- Клік правою кнопкою на "Servers" → Create → Server
-
-**General:**
-- Name: `Local Warehouse DB`
-
-**Connection:**
-```
-Host: postgres
-Port: 5432
-Maintenance database: warehouse_db
-Username: warehouse_user
-Password: warehouse_pass
-```
-
-### 4. Збережіть пароль
-- Відмітьте "Save password"
 
 ---
 
 ## 🧪 Запуск додатку з Docker БД
 
-### 1. Переконайтеся що Docker БД запущена
+### 1. Переконайтеся, що Docker БД запущена
 ```bash
 docker-compose ps
 ```
@@ -295,7 +245,7 @@ docker-compose up -d
 
 ### Проблема: "Cannot start service postgres"
 
-**Windows:** Переконайтеся що Docker Desktop запущений
+**Windows:** Переконайтеся, що Docker Desktop запущений
 
 **Linux:** Перевірте Docker daemon
 ```bash
@@ -366,7 +316,10 @@ docker-compose up -d
 
 2. **Періодично робіть backup:**
    ```bash
+   # Linux/macOS
    docker-compose exec postgres pg_dump -U warehouse_user warehouse_db > backup_$(date +%Y%m%d).sql
+   # Windows PowerShell
+   docker-compose exec postgres pg_dump -U warehouse_user warehouse_db | Out-File -Encoding utf8 backup_$(Get-Date -Format yyyyMMdd).sql
    ```
 
 3. **Переглядайте логи при проблемах:**
